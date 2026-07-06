@@ -193,3 +193,6 @@ Tesseract is decent but not perfect for game UI. Tips:
 | Wave never detected | The on-screen text may not contain your keywords. Add the exact phrase shown (e.g. `STAGE CLEAR`, `WAVE COMPLETE`) to `WAVE_DEFEATED_KEYWORDS`. |
 | Run is delayed / skipped | Normal GitHub Actions cron behavior. See "Notes & limitations". |
 | Cooldown not respected | The Actions cache for `state.json` may have been evicted; this is expected occasionally. |
+
+<!-- trigger workflow re-index -->
+
