@@ -2,7 +2,7 @@ name: Wave Defeated Monitor
 
 on:
   schedule:
-    # Every 5 minutes. NOTE: GitHub Actions cron can be delayed by a few
+    # Every 5 minutes. NOTE: GitHub Actions cron can be delayed by a few maybe
     # minutes under load; it will never run *more* often than this.
     - cron: "*/5 * * * *"
   workflow_dispatch: # manual "Run workflow" button
