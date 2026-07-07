@@ -38,9 +38,15 @@ echo "==> Deploying project to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 rsync -a --delete \
     --exclude='.git' --exclude='__pycache__' --exclude='screenshots' \
-    --exclude='state.json' --exclude='.env' --exclude='venv' \
+    --exclude='state.json' --exclude='venv' \
     "$PROJECT_DIR"/ "$INSTALL_DIR"/ 2>/dev/null || \
 cp -r "$PROJECT_DIR"/. "$INSTALL_DIR"/
+
+# Carry over .env from the source dir if it exists (rsync excludes it above
+# to avoid overwriting an existing install, but on first deploy we want it).
+if [ -f "$PROJECT_DIR/.env" ] && [ ! -f "$INSTALL_DIR/.env" ]; then
+    cp "$PROJECT_DIR/.env" "$INSTALL_DIR/.env"
+fi
 
 echo "==> Checking for .env"
 if [ ! -f "$INSTALL_DIR/.env" ]; then
