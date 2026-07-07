@@ -181,10 +181,10 @@ sudo journalctl -u wave-monitor --since "10 min ago"
 
 ## No-root setup (tmux) — when your VM user can't `sudo`
 
-If your VM user isn't a sudoer (`sudo: ... I'm afraid I can't do that`), use `setup-vm-noroot.sh` instead. It installs everything into your home directory and runs the monitor inside a `tmux` session that survives SSH disconnects. It needs two system packages already present on the VM (ask your VM admin to install them once):
+If your VM user isn't a sudoer (`sudo: ... I'm afraid I can't do that`), use `setup-vm-noroot.sh` instead. It installs everything into your home directory and runs the monitor inside a `tmux` session that survives SSH disconnects. It needs one system package already present on the VM (ask your VM admin to install it once):
 
 ```bash
-sudo apt-get install -y tesseract-ocr tmux   # run once by a sudoer
+sudo apt-get install -y tmux   # run once by a sudoer
 ```
 
 Then from the project directory as your normal user:
@@ -235,22 +235,19 @@ sudo systemctl restart wave-monitor
 Useful for tuning OCR before deploying.
 
 1. Install Python 3.10+.
-2. Install Tesseract:
-   - Windows: installer from <https://github.com/UB-Mannheim/tesseract/wiki>
-   - macOS: `brew install tesseract`
-   - Linux: `sudo apt-get install tesseract-ocr`
-3. Create your env file and install deps:
+2. Create your env file and install deps:
    ```bash
    cp .env.example .env
-   # edit .env with your real values
+   # edit .env with your real values (OCR_SPACE_API_KEY is required — get a
+   # free key at https://ocr.space/ocrapi)
    # set RUN_INTERVAL_SECONDS=0 for a single run, or leave 300 to loop
    pip install -r requirements.txt
    ```
-4. Run:
+3. Run:
    ```bash
    python monitor.py
    ```
-5. Inspect `screenshots/` to see what OCR is working with. Tune `WAVE_DEFEATED_KEYWORDS` until detection is reliable.
+4. Inspect `screenshots/` to see what OCR is working with. Tune `WAVE_DEFEATED_KEYWORDS` until detection is reliable.
 
 ---
 

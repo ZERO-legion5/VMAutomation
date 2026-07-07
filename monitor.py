@@ -220,6 +220,8 @@ def run_once():
         telegram_send(alert_msg, chat_id=TELEGRAM_ALERT_CHAT_ID)
         if filepath and os.path.exists(filepath):
             telegram_send_photo(filepath, chat_id=TELEGRAM_ALERT_CHAT_ID)
+            # Also mirror the defeat to the log chat so it's always visible there.
+            telegram_send_photo(filepath, chat_id=TELEGRAM_LOG_CHAT_ID)
 
         state.setdefault("last_alerted", {})[pad_code] = now_ts
         save_state(state)

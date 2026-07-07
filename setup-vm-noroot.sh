@@ -16,6 +16,9 @@ INSTALL_DIR="$HOME/wave-monitor"
 VENV_DIR="$INSTALL_DIR/venv"
 SESSION_NAME="wave-monitor"
 
+echo "==> Stopping any existing tmux session first"
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+
 echo "==> Checking for tmux"
 if ! command -v tmux >/dev/null 2>&1; then
     echo "ERROR: 'tmux' not found in PATH."
@@ -24,18 +27,19 @@ if ! command -v tmux >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "==> Deploying project to $INSTALL_DIR"
+echo "==> Deploying project to $INSTALL_DIR (overriding existing files)"
 mkdir -p "$INSTALL_DIR"
+# Force copy everything (including .env), overriding any existing files.
+# rsync --delete keeps the install dir in sync; falls back to cp -rf.
 rsync -a --delete \
     --exclude='.git' --exclude='__pycache__' --exclude='screenshots' \
     --exclude='state.json' --exclude='venv' \
     "$PROJECT_DIR"/ "$INSTALL_DIR"/ 2>/dev/null || \
-cp -r "$PROJECT_DIR"/. "$INSTALL_DIR"/
+cp -rf "$PROJECT_DIR"/. "$INSTALL_DIR"/
 
-# Carry over .env from the source dir if it exists (rsync excludes it above
-# to avoid overwriting an existing install, but on first deploy we want it).
-if [ -f "$PROJECT_DIR/.env" ] && [ ! -f "$INSTALL_DIR/.env" ]; then
-    cp "$PROJECT_DIR/.env" "$INSTALL_DIR/.env"
+# Always carry over .env from the source dir, overriding the install copy.
+if [ -f "$PROJECT_DIR/.env" ]; then
+    cp -f "$PROJECT_DIR/.env" "$INSTALL_DIR/.env"
 fi
 
 echo "==> Checking for .env"
@@ -53,13 +57,11 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
 fi
 chmod 600 "$INSTALL_DIR/.env"
 
-echo "==> Creating Python virtualenv"
+echo "==> Recreating Python virtualenv"
+rm -rf "$VENV_DIR"
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
 "$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
-
-echo "==> Stopping any existing tmux session"
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
 echo "==> Starting monitor in tmux session '$SESSION_NAME'"
 tmux new-session -d -s "$SESSION_NAME" -c "$INSTALL_DIR" \
