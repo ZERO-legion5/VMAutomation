@@ -1,0 +1,19 @@
+[Unit]
+Description=Wave Monitor (VMOS screenshot -> OCR -> Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wave
+WorkingDirectory=/opt/wave-monitor
+EnvironmentFile=/opt/wave-monitor/.env
+ExecStart=/opt/wave-monitor/venv/bin/python /opt/wave-monitor/monitor.py
+Restart=always
+RestartSec=10
+# Graceful shutdown: send SIGINT so the loop can finish its current sleep.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,7 @@
 """Wave monitor: screenshot -> OCR -> detect wave defeat -> Telegram.
 
+Designed to run as a long-running service on a Google Cloud VM (systemd).
+
 Run with:
     python monitor.py
 
@@ -7,10 +9,14 @@ Configuration via environment variables (see .env.example). OCR is used ONLY
 to detect wave-defeat keywords. If matched, a high-priority alert (with the
 screenshot) is sent to TELEGRAM_ALERT_CHAT_ID. If NOT matched, the screenshot
 is posted to TELEGRAM_LOG_CHAT_ID (falls back to the alert chat if not set).
+
+Set RUN_INTERVAL_SECONDS > 0 (default 300) to loop forever — ideal for a
+systemd service. Set it to 0 to run a single pass (e.g. for cron).
 """
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
@@ -25,6 +31,9 @@ import signing  # noqa: E402  (import after env loaded so credentials exist)
 PAD_CODES = [c.strip() for c in os.environ.get("PAD_CODES", "").split(",") if c.strip()]
 IMAGE_FORMAT = os.environ.get("IMAGE_FORMAT", "png")
 SETTLE_SECONDS = int(os.environ.get("SETTLE_SECONDS", "2"))
+
+# How often (in seconds) to run the monitor loop. 0 = run once and exit.
+RUN_INTERVAL_SECONDS = int(os.environ.get("RUN_INTERVAL_SECONDS", "300"))
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALERT_CHAT_ID = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "")
@@ -118,12 +127,13 @@ def save_state(state):
 
 
 # --- Main ---
-def main():
+def run_once():
+    """Run a single monitor pass over all pad codes."""
     if not PAD_CODES:
         log("PAD_CODES not set. Exiting.")
         sys.exit(1)
 
-    log(f"Starting monitor for {len(PAD_CODES)} pad(s).")
+    log(f"Starting monitor pass for {len(PAD_CODES)} pad(s).")
     state = load_state()
 
     try:
@@ -193,6 +203,23 @@ def main():
 
         state.setdefault("last_alerted", {})[pad_code] = now_ts
         save_state(state)
+
+
+def main():
+    if RUN_INTERVAL_SECONDS <= 0:
+        run_once()
+        return
+
+    # Long-running loop mode — ideal for a systemd service on a VM.
+    log(f"Loop mode: running every {RUN_INTERVAL_SECONDS}s. Press Ctrl+C to stop.")
+    while True:
+        try:
+            run_once()
+        except Exception as e:
+            # Never let an unexpected error kill the service.
+            log(f"Pass failed with unexpected error: {e}")
+        log(f"Sleeping {RUN_INTERVAL_SECONDS}s until next pass...")
+        time.sleep(RUN_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

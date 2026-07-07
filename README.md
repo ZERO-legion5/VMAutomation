@@ -1,9 +1,11 @@
 # Wave Monitor
 
-Monitors a [VMOS Cloud](https://www.vmoscloud.com/) cloud-phone instance every 5 minutes, runs OCR on the screenshot, detects whether a game **wave has been defeated**, and sends you a **Telegram alert** (with the screenshot) when it has. When no wave-defeat keyword is found, the screenshot is posted to a separate **log chat** (a muted channel you can scroll through at your leisure).
+Monitors a [VMOS Cloud](https://www.vmoscloud.com/) cloud-phone instance, runs OCR on the screenshot, detects whether a game **wave has been defeated**, and sends you a **Telegram alert** (with the screenshot) when it has. When no wave-defeat keyword is found, the screenshot is posted to a separate **log chat** (a muted channel you can scroll through at your leisure).
+
+Runs as a **long-running `systemd` service on a Google Cloud VM** — far more reliable and on-time than GitHub Actions cron, and no 60-day inactivity disablement.
 
 ```
-GitHub Actions (every 5 min)
+Google Cloud VM (systemd, loops every 5 min)
     │
     ▼
 VMOS screenshot API  ──►  download PNG
@@ -21,10 +23,11 @@ Tesseract OCR  ──►  text
 | File | Purpose |
 |---|---|
 | `signing.py` | VMOS API client with HMAC-SHA256 request signing (extracted from `a.py`). |
-| `monitor.py` | Main monitor: screenshot → OCR → wave detection → Telegram. |
-| `.env.example` | Sample environment configuration. Copy to `.env` for local runs. |
+| `monitor.py` | Main monitor: screenshot → OCR → wave detection → Telegram. Loops forever when `RUN_INTERVAL_SECONDS > 0`. |
+| `.env.example` | Sample environment configuration. Copy to `.env` for the VM. |
 | `requirements.txt` | Python dependencies. |
-| `.github/workflows/monitor.yml` | GitHub Actions workflow that runs every 5 minutes. |
+| `wave-monitor.service` | systemd unit file that runs `monitor.py` as a service. |
+| `setup-vm.sh` | One-shot setup script for a Debian/Ubuntu Google Cloud VM. |
 | `a.py` | Original one-off script (kept for reference). |
 
 ## Prerequisites
@@ -32,6 +35,7 @@ Tesseract OCR  ──►  text
 1. **VMOS Cloud credentials** — your `ACCESS_KEY` and `SECRET_KEY` (the values already in `a.py`).
 2. **Pad code(s)** — the instance ID(s) to monitor, e.g. `AC32010970468`.
 3. A **Telegram bot** (free) for notifications — see setup below.
+4. A **Google Cloud account** with billing enabled (the free `e2-micro` tier in `us-west1`/`us-central1`/`us-east1` is enough for this).
 
 ---
 
@@ -68,39 +72,52 @@ You now have:
 - `TELEGRAM_ALERT_CHAT_ID` — your DM id (wave-defeated alerts, unmuted)
 - `TELEGRAM_LOG_CHAT_ID` — the muted channel id (every-run screenshots; leave blank to reuse the alert chat)
 
-## Step 2 — Create a GitHub repository
+## Step 2 — Create a Google Cloud VM
 
-1. Go to [github.com/new](https://github.com/new) and create a **new repository**.
-   - For **unlimited free Actions minutes**, make it **public**. The screenshot secrets stay hidden either way.
-   - For a private repo, you get 2,000 free Actions minutes/month (~6.6 hours of runtime — fine if each run is ~90s).
-2. Push these files to the repo (root level):
-   ```
-   signing.py
-   monitor.py
-   requirements.txt
-   .env.example
-   .gitignore
-   .github/workflows/monitor.yml
-   ```
-   You can drag-and-drop via the GitHub web UI, or:
-   ```bash
-   git init
-   git add .
-   git commit -m "Wave monitor"
-   git branch -M main
-   git remote add origin https://github.com/<you>/<repo>.git
-   git push -u origin main
-   ```
+1. Go to the [GCP Console → Compute Engine → VM instances](https://console.cloud.google.com/compute/instances).
+2. Click **Create instance**:
+   - **Name:** `wave-monitor`
+   - **Machine type:** `e2-micro` (free-tier eligible; enough for Tesseract on a single small screenshot).
+   - **Boot disk:** Debian 12 (or Ubuntu 22.04+), 10 GB standard persistent disk.
+   - **Firewall:** leave defaults — the monitor only makes outbound HTTPS calls, no inbound ports needed.
+3. Click **Create** and wait for it to boot.
 
-   > **Never commit `.env`** — it contains secrets. `.gitignore` already excludes it.
+> Tip: a static external IP is not required, but assigning one (`VM details → Network interfaces → External IP → Reserve`) makes SSH and log scraping easier.
 
-## Step 3 — Add secrets to the repository
+## Step 3 — Put your code and config on the VM
 
-In your repo: **Settings → Secrets and variables → Actions → New repository secret**.
+### Option A — clone from git (recommended)
 
-Add these **secrets** (sensitive values):
+Push this repo to GitHub (private is fine — there are no GitHub Actions minutes involved now), then on the VM:
 
-| Secret name | Value |
+```bash
+sudo apt-get update && sudo apt-get install -y git
+git clone https://github.com/<you>/<repo>.git ~/wave-monitor
+cd ~/wave-monitor
+```
+
+### Option B — upload files directly
+
+```bash
+# From your local machine with gcloud installed:
+gcloud compute scp --recurse . wave-monitor:~/wave-monitor
+```
+
+Files needed at minimum: `signing.py`, `monitor.py`, `requirements.txt`, `.env.example`, `wave-monitor.service`, `setup-vm.sh`.
+
+## Step 4 — Configure `.env`
+
+On the VM, create `.env` from the example and fill in your real values:
+
+```bash
+cd ~/wave-monitor
+cp .env.example .env
+nano .env
+```
+
+Set at least:
+
+| Variable | Value |
 |---|---|
 | `VMOS_ACCESS_KEY` | your VMOS access key |
 | `VMOS_SECRET_KEY` | your VMOS secret key |
@@ -110,27 +127,72 @@ Add these **secrets** (sensitive values):
 | `TELEGRAM_ALERT_CHAT_ID` | your alert chat id |
 | `TELEGRAM_LOG_CHAT_ID` | your log chat id (muted channel) |
 
-Under **Settings → Secrets and variables → Actions → Variables** (non-sensitive config), add these **variables** (optional — defaults are baked in):
+Optional tuning variables:
 
-| Variable name | Example value |
-|---|---|
-| `IMAGE_FORMAT` | `png` |
-| `SETTLE_SECONDS` | `2` |
-| `WAVE_DEFEATED_KEYWORDS` | `wave defeated,wave cleared,victory,level complete` |
-| `ALERT_COOLDOWN_SECONDS` | `600` |
+| Variable | Default | Notes |
+|---|---|---|
+| `IMAGE_FORMAT` | `png` | |
+| `SETTLE_SECONDS` | `2` | wait between screenshot trigger and download |
+| `WAVE_DEFEATED_KEYWORDS` | `wave defeated,wave cleared,victory` | comma-separated, case-insensitive |
+| `ALERT_COOLDOWN_SECONDS` | `600` | don't re-alert the same pad within this window |
+| `RUN_INTERVAL_SECONDS` | `300` | loop interval. `0` = run once and exit (cron mode). |
 
-> Secrets are encrypted and never visible in logs. Variables are visible but non-sensitive.
+> **Never commit `.env`** — it contains secrets. `.gitignore` already excludes it.
 
-## Step 4 — Run it
+## Step 5 — Run the setup script
 
-1. In your repo: **Actions** tab → select **"Wave Monitor"** workflow.
-2. Click **"Run workflow"** (manual trigger) to test immediately.
-3. Check the run logs — you'll see OCR output and Telegram delivery status.
-4. If it works, the schedule (`*/5 * * * *`) takes over automatically. GitHub Actions cron is **best-effort** and can be delayed 1–15 min under load.
+From the project directory on the VM:
 
-### Artifacts
+```bash
+sudo bash setup-vm.sh
+```
 
-Each run uploads the screenshots to **run artifacts** (Actions tab → run → Artifacts at the bottom). Use these to verify OCR accuracy and tune your keywords. Artifacts are kept 7 days.
+This script:
+- installs Python 3, Tesseract OCR, and git,
+- creates a dedicated `wave` system user,
+- copies the project to `/opt/wave-monitor`,
+- builds a Python virtualenv and installs `requirements.txt`,
+- installs and enables the `wave-monitor` systemd service.
+
+If `.env` wasn't created in Step 4, the script will tell you to create it first and exit.
+
+## Step 6 — Verify it's running
+
+```bash
+sudo systemctl status wave-monitor
+sudo journalctl -u wave-monitor -f
+```
+
+You should see a "Starting monitor pass..." log each cycle, plus Telegram deliveries. Screenshots are written to `/opt/wave-monitor/screenshots/` — inspect them to tune OCR.
+
+Useful service commands:
+
+```bash
+sudo systemctl restart wave-monitor   # restart after editing .env or code
+sudo systemctl stop wave-monitor
+sudo systemctl start wave-monitor
+sudo journalctl -u wave-monitor --since "10 min ago"
+```
+
+---
+
+## Updating the code
+
+After pushing new code to git, pull and redeploy:
+
+```bash
+cd ~/wave-monitor
+git pull
+sudo bash setup-vm.sh     # re-copies to /opt/wave-monitor and restarts the service
+```
+
+For a quick code-only restart without re-running the full setup:
+
+```bash
+sudo cp -r ~/wave-monitor/{monitor.py,signing.py,requirements.txt} /opt/wave-monitor/
+sudo -u wave /opt/wave-monitor/venv/bin/pip install -r /opt/wave-monitor/requirements.txt
+sudo systemctl restart wave-monitor
+```
 
 ---
 
@@ -147,13 +209,14 @@ Useful for tuning OCR before deploying.
    ```bash
    cp .env.example .env
    # edit .env with your real values
+   # set RUN_INTERVAL_SECONDS=0 for a single run, or leave 300 to loop
    pip install -r requirements.txt
    ```
 4. Run:
    ```bash
    python monitor.py
    ```
-5. Inspect `screenshots/` to see what OCR is working with. Tune `WAVE_DEFEATED_KEYWORDS` until detection is reliable, then push those values as repo Variables.
+5. Inspect `screenshots/` to see what OCR is working with. Tune `WAVE_DEFEATED_KEYWORDS` until detection is reliable.
 
 ---
 
@@ -164,7 +227,8 @@ Useful for tuning OCR before deploying.
   - **If** any `WAVE_DEFEATED_KEYWORDS` substring is found (case-insensitive), sends an alert + the screenshot to `TELEGRAM_ALERT_CHAT_ID` (your DM).
   - **If not**, posts the screenshot to `TELEGRAM_LOG_CHAT_ID` (your muted log channel).
   - Suppresses duplicate alerts for the same pad within `ALERT_COOLDOWN_SECONDS` using `state.json` (during cooldown, screenshots still go to the log chat).
-- The GitHub Actions workflow restores `state.json` from cache so cooldown dedup survives between runs.
+- When `RUN_INTERVAL_SECONDS > 0` (the default, set by the systemd service), `monitor.py` loops forever; an unexpected error in one pass never kills the service. `state.json` persists on the VM disk, so cooldown dedup survives across restarts.
+- The `wave-monitor.service` systemd unit runs the monitor under a dedicated `wave` user and auto-restarts on crash or VM reboot.
 
 ## Tuning OCR accuracy
 
@@ -173,26 +237,23 @@ Tesseract is decent but not perfect for game UI. Tips:
 - **Upscaling** is already enabled for images under 1000px wide.
 - If text is stylized, try `pytesseract.image_to_string(img, config="--psm 6")` (edit `monitor.py`).
 - For much better accuracy, replace Tesseract with **EasyOCR** (`pip install easyocr`) — heavier but far better on game fonts. The `run_ocr()` function is the only place to change.
-- Use the uploaded artifact screenshots to verify what Tesseract sees.
+- Inspect the screenshots in `/opt/wave-monitor/screenshots/` to verify what Tesseract sees.
 
 ## Notes & limitations
 
-- **GitHub Actions cron is not exact.** Expect ±5–15 min drift, and runs can be skipped during GitHub outages. This is fine for "wave cleared" alerts but not for sub-minute precision.
-- **Scheduled workflows are disabled after 60 days of repo inactivity.** Push any commit to re-enable.
-- **State persistence** uses the Actions cache (7-day retention). If the cache is evicted, cooldown dedup resets — worst case you get one extra alert. Acceptable for this use case.
-- **VMOS rate limits** — verify the screenshot API tolerates a call every 5 min. If you see throttling (`code != 200`), raise `SETTLE_SECONDS` or increase the cron interval.
-- **Credentials** are never in the repo — only in GitHub secrets or your local `.env`.
+- **Timing is exact.** Unlike GitHub Actions cron, the `time.sleep(RUN_INTERVAL_SECONDS)` loop fires on a predictable cadence (no multi-minute drift), and `systemd` `Restart=always` keeps it alive across crashes and reboots.
+- **Cost.** An `e2-micro` in a free-tier region costs nothing; otherwise a few USD/month. The VM is idle >99% of the time.
+- **VMOS rate limits** — verify the screenshot API tolerates a call every 5 min. If you see throttling (`code != 200`), raise `SETTLE_SECONDS` or increase `RUN_INTERVAL_SECONDS`.
+- **Credentials** are never in the repo — only in the VM's `/opt/wave-monitor/.env` (mode `600`, owned by the `wave` user).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `VMOS_ACCESS_KEY and VMOS_SECRET_KEY must be set` | Secret not added to repo, or not named exactly `VMOS_ACCESS_KEY` / `VMOS_SECRET_KEY`. |
-| Telegram messages not arriving | Verify `TELEGRAM_BOT_TOKEN` and chat ids; the bot must have been messaged/added to the chat first. For channels, the bot must be an admin. Check the run log for `Telegram error <code>`. |
-| OCR finds nothing | Download the artifact screenshot, check what's actually visible. Tune keywords. Game text may be stylized — consider EasyOCR. |
+| `VMOS_ACCESS_KEY and VMOS_SECRET_KEY must be set` | `.env` missing or not loaded. Confirm `/opt/wave-monitor/.env` exists and `systemctl restart wave-monitor`. |
+| Service won't start | `sudo journalctl -u wave-monitor -n 50` for the Python traceback. Usually a missing dep or bad `.env` value. |
+| Telegram messages not arriving | Verify `TELEGRAM_BOT_TOKEN` and chat ids; the bot must have been messaged/added to the chat first. For channels, the bot must be an admin. Check logs for `Telegram error <code>`. |
+| OCR finds nothing | Inspect `/opt/wave-monitor/screenshots/`. Tune keywords. Game text may be stylized — consider EasyOCR. |
 | Wave never detected | The on-screen text may not contain your keywords. Add the exact phrase shown (e.g. `STAGE CLEAR`, `WAVE COMPLETE`) to `WAVE_DEFEATED_KEYWORDS`. |
-| Run is delayed / skipped | Normal GitHub Actions cron behavior. See "Notes & limitations". |
-| Cooldown not respected | The Actions cache for `state.json` may have been evicted; this is expected occasionally. |
-
-<!-- trigger workflow re-index -->
-
+| Loop stopped unexpectedly | `systemctl` should auto-restart it. If it didn't, check `Restart=` in the unit and `journalctl` for the exit reason. |
+| Cooldown not respected | `state.json` lives on disk at `/opt/wave-monitor/state.json` and persists normally. Only a deleted/overwritten file resets it. |
