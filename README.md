@@ -26,8 +26,9 @@ Tesseract OCR  ──►  text
 | `monitor.py` | Main monitor: screenshot → OCR → wave detection → Telegram. Loops forever when `RUN_INTERVAL_SECONDS > 0`. |
 | `.env.example` | Sample environment configuration. Copy to `.env` for the VM. |
 | `requirements.txt` | Python dependencies. |
-| `wave-monitor.service` | systemd unit file that runs `monitor.py` as a service. |
-| `setup-vm.sh` | One-shot setup script for a Debian/Ubuntu Google Cloud VM. |
+| `wave-monitor.service` | systemd unit file that runs `monitor.py` as a service (root setup). |
+| `setup-vm.sh` | One-shot setup script for a Debian/Ubuntu Google Cloud VM (root, systemd). |
+| `setup-vm-noroot.sh` | No-root setup: user-space venv + tmux session. Use when your VM user can't `sudo`. |
 | `a.py` | Original one-off script (kept for reference). |
 
 ## Prerequisites
@@ -176,6 +177,37 @@ sudo journalctl -u wave-monitor --since "10 min ago"
 
 ---
 
+## No-root setup (tmux) — when your VM user can't `sudo`
+
+If your VM user isn't a sudoer (`sudo: ... I'm afraid I can't do that`), use `setup-vm-noroot.sh` instead. It installs everything into your home directory and runs the monitor inside a `tmux` session that survives SSH disconnects. It needs two system packages already present on the VM (ask your VM admin to install them once):
+
+```bash
+sudo apt-get install -y tesseract-ocr tmux   # run once by a sudoer
+```
+
+Then from the project directory as your normal user:
+
+```bash
+bash setup-vm-noroot.sh
+```
+
+The script will create `~/wave-monitor` with a Python venv, build `.env` from `.env.example` on first run (edit it and re-run), and start the monitor in a tmux session named `wave-monitor`.
+
+Useful tmux commands:
+
+```bash
+tmux attach -t wave-monitor        # view live logs (Ctrl+B then D to detach)
+tmux kill-session -t wave-monitor  # stop the monitor
+```
+
+Auto-start on VM reboot — add to your crontab (`crontab -e`):
+
+```
+@reboot bash ~/wave-monitor/setup-vm-noroot.sh
+```
+
+> Caveat vs. the systemd setup: if the monitor process crashes inside tmux, it stays down until you re-run the script (systemd would auto-restart it). The monitor loop itself catches per-pass errors, so only a hard Python/import failure would stop it.
+
 ## Updating the code
 
 After pushing new code to git, pull and redeploy:
@@ -252,6 +284,7 @@ Tesseract is decent but not perfect for game UI. Tips:
 |---|---|
 | `VMOS_ACCESS_KEY and VMOS_SECRET_KEY must be set` | `.env` missing or not loaded. Confirm `/opt/wave-monitor/.env` exists and `systemctl restart wave-monitor`. |
 | Service won't start | `sudo journalctl -u wave-monitor -n 50` for the Python traceback. Usually a missing dep or bad `.env` value. |
+| `sudo: ... I'm afraid I can't do that` | Your VM user isn't a sudoer. Use the [no-root (tmux) setup](#no-root-setup-tmux--when-your-vm-user-cant-sudo) instead, or get sudo via the GCP serial console / a default sudoer account. |
 | Telegram messages not arriving | Verify `TELEGRAM_BOT_TOKEN` and chat ids; the bot must have been messaged/added to the chat first. For channels, the bot must be an admin. Check logs for `Telegram error <code>`. |
 | OCR finds nothing | Inspect `/opt/wave-monitor/screenshots/`. Tune keywords. Game text may be stylized — consider EasyOCR. |
 | Wave never detected | The on-screen text may not contain your keywords. Add the exact phrase shown (e.g. `STAGE CLEAR`, `WAVE COMPLETE`) to `WAVE_DEFEATED_KEYWORDS`. |
