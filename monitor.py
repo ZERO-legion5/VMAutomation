@@ -20,7 +20,6 @@ import time
 from datetime import datetime, timezone
 
 import requests
-from PIL import Image
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,6 +44,19 @@ WAVE_DEFEATED_KEYWORDS = [
     k.strip().lower() for k in os.environ.get("WAVE_DEFEATED_KEYWORDS", "wave defeated,wave cleared,victory").split(",")
     if k.strip()
 ]
+
+# OCR backend: OCR.space API (free, 25k requests/month). Needs no local
+# RAM/CPU and is far more accurate on stylized game fonts than Tesseract.
+OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "")
+if not OCR_SPACE_API_KEY:
+    raise RuntimeError(
+        "OCR_SPACE_API_KEY must be set in the environment. "
+        "Get a free key at https://ocr.space/ocrapi"
+    )
+# OCR.space engine: 1 = default, 2 = better for low-resolution / stylized text.
+OCR_SPACE_ENGINE = os.environ.get("OCR_SPACE_ENGINE", "2")
+# Optional: set to a base URL proxy if api.ocr.space is blocked. Leave blank.
+OCR_SPACE_API_URL = os.environ.get("OCR_SPACE_API_URL", "https://api.ocr.space/parse/image")
 
 # State file to avoid re-alerting on the same wave repeatedly.
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
@@ -72,14 +84,14 @@ def telegram_send(text, chat_id=None, parse_mode=None):
         log(f"Telegram request failed: {e}")
 
 
-def telegram_send_photo(filepath, caption, chat_id=None):
+def telegram_send_photo(filepath, chat_id=None):
     if not TELEGRAM_BOT_TOKEN:
         return
     chat_id = chat_id or TELEGRAM_ALERT_CHAT_ID
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     try:
         with open(filepath, "rb") as f:
-            resp = requests.post(url, data={"chat_id": chat_id, "caption": caption}, files={"photo": f}, timeout=60)
+            resp = requests.post(url, data={"chat_id": chat_id}, files={"photo": f}, timeout=60)
         if resp.status_code != 200:
             log(f"Telegram photo error {resp.status_code}: {resp.text}")
     except requests.RequestException as e:
@@ -87,16 +99,37 @@ def telegram_send_photo(filepath, caption, chat_id=None):
 
 
 # --- OCR ---
+def _ocr_space(filepath):
+    """Run OCR via the OCR.space free API. Returns recognized text."""
+    import base64
+
+    with open(filepath, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    data_url = f"data:image/png;base64,{b64}"
+
+    payload = {
+        "apikey": OCR_SPACE_API_KEY,
+        "base64Image": data_url,
+        "language": "eng",
+        "isOverlayRequired": "false",
+        "scale": "true",
+        "detectOrientation": "true",
+        "OCREngine": OCR_SPACE_ENGINE,
+    }
+    resp = requests.post(OCR_SPACE_API_URL, data=payload, timeout=60)
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get("IsErroredOnProcessing"):
+        raise RuntimeError(f"OCR.space error: {body.get('ErrorMessage', body)}")
+    parts = []
+    for r in body.get("ParsedResults", []) or []:
+        parts.append(r.get("ParsedText", "") or "")
+    return "\n".join(parts).strip()
+
+
 def run_ocr(filepath):
-    """Run Tesseract OCR on an image, return the recognized text."""
-    import pytesseract
-    img = Image.open(filepath)
-    # Upscale small images to improve OCR accuracy.
-    if img.width < 1000:
-        new_size = (img.width * 2, img.height * 2)
-        img = img.resize(new_size, Image.LANCZOS)
-    text = pytesseract.image_to_string(img)
-    return text
+    """Run OCR on an image via the OCR.space API and return the recognized text."""
+    return _ocr_space(filepath)
 
 
 def is_wave_defeated(text):
@@ -160,11 +193,7 @@ def run_once():
         except Exception as e:
             log(f"[{pad_code}] OCR failed: {e}")
             # Still post the photo to the log chat so you can see what happened.
-            telegram_send_photo(
-                filepath,
-                f"[{pad_code}] OCR failed: {e}\n{datetime.now(timezone.utc).isoformat()}",
-                chat_id=TELEGRAM_LOG_CHAT_ID,
-            )
+            telegram_send_photo(filepath, chat_id=TELEGRAM_LOG_CHAT_ID)
             continue
 
         log(f"[{pad_code}] OCR text (first 200 chars): {ocr_text[:200]!r}")
@@ -173,8 +202,7 @@ def run_once():
 
         if not defeated:
             # No wave-defeat keyword found: post the screenshot to the log chat.
-            caption = f"[{pad_code}] {datetime.now(timezone.utc).isoformat()}"
-            telegram_send_photo(filepath, caption, chat_id=TELEGRAM_LOG_CHAT_ID)
+            telegram_send_photo(filepath, chat_id=TELEGRAM_LOG_CHAT_ID)
             continue
 
         # Wave defeated: avoid re-alerting within a cooldown window.
@@ -184,22 +212,14 @@ def run_once():
         if now_ts - last_alerted_ts < cooldown:
             log(f"[{pad_code}] Wave defeated ('{matched_kw}') but in cooldown; not alerting.")
             # Post to log chat instead so it's still visible without spamming alerts.
-            telegram_send_photo(
-                filepath,
-                f"[{pad_code}] Wave defeated ('{matched_kw}') - in cooldown\n{datetime.now(timezone.utc).isoformat()}",
-                chat_id=TELEGRAM_LOG_CHAT_ID,
-            )
+            telegram_send_photo(filepath, chat_id=TELEGRAM_LOG_CHAT_ID)
             continue
 
-        alert_msg = (
-            f"[{pad_code}] WAVE DEFEATED!\n"
-            f"Matched: '{matched_kw}'\n"
-            f"Time: {datetime.now(timezone.utc).isoformat()}"
-        )
-        log(alert_msg)
+        alert_msg = "WAVE DEFEATED!"
+        log(f"[{pad_code}] {alert_msg} (matched '{matched_kw}')")
         telegram_send(alert_msg, chat_id=TELEGRAM_ALERT_CHAT_ID)
         if filepath and os.path.exists(filepath):
-            telegram_send_photo(filepath, alert_msg, chat_id=TELEGRAM_ALERT_CHAT_ID)
+            telegram_send_photo(filepath, chat_id=TELEGRAM_ALERT_CHAT_ID)
 
         state.setdefault("last_alerted", {})[pad_code] = now_ts
         save_state(state)

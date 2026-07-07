@@ -11,7 +11,7 @@ Google Cloud VM (systemd, loops every 5 min)
 VMOS screenshot API  ──►  download PNG
     │
     ▼
-Tesseract OCR  ──►  text
+OCR.space API (or Tesseract)  ──►  text
     │
     ├─► "wave defeated" keywords?  ──►  Telegram DM alert + photo
     │
@@ -134,6 +134,8 @@ Optional tuning variables:
 |---|---|---|
 | `IMAGE_FORMAT` | `png` | |
 | `SETTLE_SECONDS` | `2` | wait between screenshot trigger and download |
+| `OCR_SPACE_API_KEY` | *(blank)* | free key from <https://ocr.space/ocrapi>; REQUIRED — the accurate cloud OCR backend. Monitor won't start without it. |
+| `OCR_SPACE_ENGINE` | `2` | OCR.space engine: `1` = default, `2` = better for low-res/stylized text |
 | `WAVE_DEFEATED_KEYWORDS` | `wave defeated,wave cleared,victory` | comma-separated, case-insensitive |
 | `ALERT_COOLDOWN_SECONDS` | `600` | don't re-alert the same pad within this window |
 | `RUN_INTERVAL_SECONDS` | `300` | loop interval. `0` = run once and exit (cron mode). |
@@ -255,7 +257,7 @@ Useful for tuning OCR before deploying.
 ## How it works
 
 - `signing.py` reproduces the HMAC-SHA256 request signing from `a.py`, reads credentials from the environment, and exposes `fetch_screenshot()` which triggers a screenshot, waits for the render, downloads the PNG.
-- `monitor.py` calls `fetch_screenshot()`, runs Tesseract OCR, and:
+- `monitor.py` calls `fetch_screenshot()`, runs OCR (OCR.space API if `OCR_SPACE_API_KEY` is set, else local Tesseract), and:
   - **If** any `WAVE_DEFEATED_KEYWORDS` substring is found (case-insensitive), sends an alert + the screenshot to `TELEGRAM_ALERT_CHAT_ID` (your DM).
   - **If not**, posts the screenshot to `TELEGRAM_LOG_CHAT_ID` (your muted log channel).
   - Suppresses duplicate alerts for the same pad within `ALERT_COOLDOWN_SECONDS` using `state.json` (during cooldown, screenshots still go to the log chat).
@@ -264,12 +266,11 @@ Useful for tuning OCR before deploying.
 
 ## Tuning OCR accuracy
 
-Tesseract is decent but not perfect for game UI. Tips:
+The monitor uses the **OCR.space** free API (25,000 requests/month — you use ~9,000/mo at 300/day) via `OCR_SPACE_API_KEY` in `.env`. It's far more accurate than Tesseract on stylized game fonts and uses no local RAM/CPU, which makes it ideal for a 1 GB VM. Get a free key at <https://ocr.space/ocrapi> — **the monitor will not start without it.**
 
-- **Upscaling** is already enabled for images under 1000px wide.
-- If text is stylized, try `pytesseract.image_to_string(img, config="--psm 6")` (edit `monitor.py`).
-- For much better accuracy, replace Tesseract with **EasyOCR** (`pip install easyocr`) — heavier but far better on game fonts. The `run_ocr()` function is the only place to change.
-- Inspect the screenshots in `/opt/wave-monitor/screenshots/` to verify what Tesseract sees.
+- `OCR_SPACE_ENGINE=2` (default) is tuned for low-resolution / stylized text. Switch to `1` if you see worse results.
+- Inspect the screenshots in `/opt/wave-monitor/screenshots/` to verify what OCR sees.
+- Tune `WAVE_DEFEATED_KEYWORDS` to the exact phrases shown on a defeat (e.g. `STAGE CLEAR`, `WAVE COMPLETE`).
 
 ## Notes & limitations
 
@@ -286,7 +287,7 @@ Tesseract is decent but not perfect for game UI. Tips:
 | Service won't start | `sudo journalctl -u wave-monitor -n 50` for the Python traceback. Usually a missing dep or bad `.env` value. |
 | `sudo: ... I'm afraid I can't do that` | Your VM user isn't a sudoer. Use the [no-root (tmux) setup](#no-root-setup-tmux--when-your-vm-user-cant-sudo) instead, or get sudo via the GCP serial console / a default sudoer account. |
 | Telegram messages not arriving | Verify `TELEGRAM_BOT_TOKEN` and chat ids; the bot must have been messaged/added to the chat first. For channels, the bot must be an admin. Check logs for `Telegram error <code>`. |
-| OCR finds nothing | Inspect `/opt/wave-monitor/screenshots/`. Tune keywords. Game text may be stylized — consider EasyOCR. |
+| OCR finds nothing | Inspect `/opt/wave-monitor/screenshots/`. Set `OCR_SPACE_API_KEY` in `.env` for the more accurate OCR.space backend. Tune keywords. |
 | Wave never detected | The on-screen text may not contain your keywords. Add the exact phrase shown (e.g. `STAGE CLEAR`, `WAVE COMPLETE`) to `WAVE_DEFEATED_KEYWORDS`. |
 | Loop stopped unexpectedly | `systemctl` should auto-restart it. If it didn't, check `Restart=` in the unit and `journalctl` for the exit reason. |
 | Cooldown not respected | `state.json` lives on disk at `/opt/wave-monitor/state.json` and persists normally. Only a deleted/overwritten file resets it. |

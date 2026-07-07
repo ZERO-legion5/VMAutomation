@@ -7,9 +7,9 @@ set -euo pipefail
 INSTALL_DIR="/opt/wave-monitor"
 SERVICE_USER="wave"
 
-echo "==> Installing system packages (Python, Tesseract, etc.)"
+echo "==> Installing system packages (Python, etc.)"
 apt-get update -y
-apt-get install -y python3 python3-venv python3-pip tesseract-ocr git
+apt-get install -y python3 python3-venv python3-pip git
 
 echo "==> Creating service user '$SERVICE_USER'"
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then

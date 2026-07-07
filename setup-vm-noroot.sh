@@ -6,25 +6,15 @@
 # Run as your normal user (NO sudo):
 #   bash setup-vm-noroot.sh
 #
-# Prerequisite: Tesseract OCR must be installed on the system by someone with
-# root. Check with:  tesseract --version
-# If it's missing, ask your VM admin to run:  sudo apt-get install -y tesseract-ocr
+# Prerequisite: tmux must be installed on the system by someone with root.
+# Check with:  tmux -V
+# If it's missing, ask your VM admin to run:  sudo apt-get install -y tmux
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/wave-monitor"
 VENV_DIR="$INSTALL_DIR/venv"
 SESSION_NAME="wave-monitor"
-
-echo "==> Checking for Tesseract OCR"
-if ! command -v tesseract >/dev/null 2>&1; then
-    echo "ERROR: 'tesseract' not found in PATH."
-    echo "       Tesseract is a system package and needs root to install."
-    echo "       Ask your VM admin to run:  sudo apt-get install -y tesseract-ocr"
-    echo "       (or have them grant you sudo and run setup-vm.sh instead)."
-    exit 1
-fi
-echo "    Found: $(tesseract --version | head -n1)"
 
 echo "==> Checking for tmux"
 if ! command -v tmux >/dev/null 2>&1; then
